@@ -1,0 +1,19 @@
+MS-One/
+├── index.html
+├── manifest.json
+├── service-worker.js
+├── css/
+│   ├── app.css
+│   ├── mobile.css
+│   └── components.css
+├── js/
+│   ├── app.js
+│   ├── router.js
+│   ├── database.js
+│   ├── storage.js
+│   └── utils.js
+├── assets/
+│   ├── logo/
+│   ├── icons/
+│   └── images/
+└── data/
