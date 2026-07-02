@@ -210,6 +210,7 @@ textarea.form-input{resize:vertical;min-height:80px;}
 ::-webkit-scrollbar-thumb{background:var(--border);border-radius:99px;}
 
 </style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 </head>
 <body>
 
@@ -1011,6 +1012,16 @@ textarea.form-input{resize:vertical;min-height:80px;}
 <div class="toast" id="toast"><span class="toast-icon">✅</span><span id="toast-msg">Salvo!</span></div>
 
 <script>
+// ============================================================
+// SUPABASE — conexão com o banco de dados real
+// ============================================================
+const SUPABASE_URL = 'https://rhqogwislpaiveecyfir.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_v9Z1HFIu8KqK1rQGShZWTw_agWttyEk';
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// Domínio fictício usado para transformar o "usuário" (ex: admin, edgar)
+// em um e-mail válido para o Supabase Auth, mantendo o login por usuário na tela.
+const AUTH_DOMAIN = '@msrepresentacoes.app';
+
 const titles = {
   dashboard:'Dashboard', parceiros:'Parceiros / Fornecedores', catalogo:'Catálogo de Produtos',
   crm:'CRM — Clientes', orcamentos:'Orçamentos', comissoes:'Comissões',
@@ -1178,38 +1189,58 @@ const PERMISSOES = {
   backoffice: ['dashboard','catalogo','comissoes','relatorios','apresentacoes','parceiros']
 };
 
-let usuariosDB = JSON.parse(localStorage.getItem('ms-usuarios') || 'null');
-if (!usuariosDB) {
-  usuariosDB = [
-    { nome:'Administrador', user:'admin', senha:'admin123', perfil:'admin', email:'' },
-    { nome:'Edgar',         user:'edgar', senha:'edgar123', perfil:'vendedor', email:'' },
-    { nome:'Nelma',         user:'nelma', senha:'nelma123', perfil:'backoffice', email:'' }
-  ];
-  localStorage.setItem('ms-usuarios', JSON.stringify(usuariosDB));
-}
+let usuariosDB = [];       // lista de perfis (tabela 'usuarios'), carregada do Supabase
+let usuarioAtual = null;   // perfil do usuário logado
 
-let usuarioAtual = JSON.parse(sessionStorage.getItem('ms-session') || 'null');
-
-function doLogin() {
+async function doLogin() {
   const u = document.getElementById('login-user').value.trim().toLowerCase();
   const s = document.getElementById('login-pass').value;
-  const found = usuariosDB.find(x => x.user === u && x.senha === s);
-  if (!found) { document.getElementById('login-error').style.display='block'; return; }
-  usuarioAtual = found;
-  sessionStorage.setItem('ms-session', JSON.stringify(found));
-  document.getElementById('login-screen').style.display = 'none';
-  aplicarPermissoes(found);
-  document.getElementById('topbar-perfil').textContent = found.nome + ' · ' + PERFIL_LABELS[found.perfil];
-  document.getElementById('topbar-avatar').textContent = found.nome.charAt(0).toUpperCase();
-  document.getElementById('modal-user-nome').textContent = found.nome;
-  document.getElementById('modal-user-perfil').textContent = PERFIL_LABELS[found.perfil];
-  document.getElementById('modal-avatar-big').textContent = found.nome.charAt(0).toUpperCase();
-  // Ocultar nav usuários se não for admin
-  document.getElementById('nav-usuarios').style.display = found.perfil === 'admin' ? '' : 'none';
+  document.getElementById('login-error').style.display = 'none';
+
+  const { data, error } = await sb.auth.signInWithPassword({
+    email: u + AUTH_DOMAIN,
+    password: s
+  });
+
+  if (error || !data.session) {
+    document.getElementById('login-error').textContent = 'Usuário ou senha inválidos.';
+    document.getElementById('login-error').style.display = 'block';
+    return;
+  }
+
+  await carregarPerfilLogado();
 }
 
-function doLogout() {
-  sessionStorage.removeItem('ms-session');
+async function carregarPerfilLogado() {
+  const { data: { user } } = await sb.auth.getUser();
+  if (!user) return;
+
+  const { data: perfil, error } = await sb.from('usuarios').select('*').eq('id', user.id).single();
+  if (error || !perfil) {
+    document.getElementById('login-error').textContent = 'Login ok, mas o perfil do usuário não foi encontrado na tabela usuarios.';
+    document.getElementById('login-error').style.display = 'block';
+    await sb.auth.signOut();
+    return;
+  }
+
+  usuarioAtual = { nome: perfil.nome, user: perfil.user_login, perfil: perfil.perfil, email: perfil.email, id: perfil.id };
+
+  document.getElementById('login-screen').style.display = 'none';
+  aplicarPermissoes(usuarioAtual);
+  document.getElementById('topbar-perfil').textContent = usuarioAtual.nome + ' · ' + PERFIL_LABELS[usuarioAtual.perfil];
+  document.getElementById('topbar-avatar').textContent = usuarioAtual.nome.charAt(0).toUpperCase();
+  document.getElementById('modal-user-nome').textContent = usuarioAtual.nome;
+  document.getElementById('modal-user-perfil').textContent = PERFIL_LABELS[usuarioAtual.perfil];
+  document.getElementById('modal-avatar-big').textContent = usuarioAtual.nome.charAt(0).toUpperCase();
+  document.getElementById('nav-usuarios').style.display = usuarioAtual.perfil === 'admin' ? '' : 'none';
+
+  // Carregar dados reais do módulo de Oportunidades assim que logar
+  if (typeof carregarOportunidades === 'function') carregarOportunidades();
+  if (typeof carregarUsuarios === 'function') carregarUsuarios();
+}
+
+async function doLogout() {
+  await sb.auth.signOut();
   usuarioAtual = null;
   closeModal('modal-perfil-info');
   document.getElementById('login-screen').style.display = 'flex';
@@ -1217,6 +1248,12 @@ function doLogout() {
   document.getElementById('login-pass').value = '';
   document.getElementById('login-error').style.display = 'none';
 }
+
+// Ao carregar a página, verifica se já existe uma sessão válida (evita pedir login de novo)
+(async () => {
+  const { data } = await sb.auth.getSession();
+  if (data.session) await carregarPerfilLogado();
+})();
 
 function aplicarPermissoes(user) {
   const permitidos = PERMISSOES[user.perfil] || [];
@@ -1229,29 +1266,53 @@ function aplicarPermissoes(user) {
   });
 }
 
-function salvarUsuario() {
+// Cliente Supabase separado (storage próprio) para criar novos usuários
+// sem derrubar a sessão do admin que está logado.
+const sbAdmin = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: { storageKey: 'ms-admin-temp-auth', persistSession: false }
+});
+
+async function salvarUsuario() {
   const nome  = document.getElementById('nu-nome').value.trim();
   const user  = document.getElementById('nu-user').value.trim().toLowerCase();
   const senha = document.getElementById('nu-senha').value;
   const perfil= document.getElementById('nu-perfil').value;
   const email = document.getElementById('nu-email').value.trim();
-  if (!nome || !user || senha.length < 4) { showToast('Preencha nome, usuário e senha (mín. 4 chars)'); return; }
-  if (usuariosDB.find(x => x.user === user)) { showToast('Usuário já existe!'); return; }
-  usuariosDB.push({ nome, user, senha, perfil, email });
-  localStorage.setItem('ms-usuarios', JSON.stringify(usuariosDB));
+  if (!nome || !user || senha.length < 6) { showToast('Preencha nome, usuário e senha (mín. 6 chars)'); return; }
+  if (usuariosDB.find(x => x.user_login === user)) { showToast('Usuário já existe!'); return; }
+
+  const { data, error } = await sbAdmin.auth.signUp({
+    email: user + AUTH_DOMAIN,
+    password: senha
+  });
+  if (error || !data.user) { showToast('Erro ao criar login: ' + (error ? error.message : '')); return; }
+
+  const { error: perfilError } = await sb.from('usuarios').insert({
+    id: data.user.id, nome, user_login: user, perfil, email
+  });
+  if (perfilError) { showToast('Login criado, mas erro ao salvar perfil: ' + perfilError.message); return; }
+
   ['nu-nome','nu-user','nu-senha','nu-email'].forEach(id => document.getElementById(id).value = '');
   closeModal('modal-usuario');
-  renderUsuarios();
+  await carregarUsuarios();
   showToast('Usuário criado com sucesso!');
 }
 
-function excluirUsuario(i) {
-  if (usuariosDB[i].user === (usuarioAtual && usuarioAtual.user)) { showToast('Não é possível excluir o usuário logado.'); return; }
-  if (!confirm('Excluir o usuário ' + usuariosDB[i].nome + '?')) return;
-  usuariosDB.splice(i, 1);
-  localStorage.setItem('ms-usuarios', JSON.stringify(usuariosDB));
-  renderUsuarios();
+async function excluirUsuario(i) {
+  const u = usuariosDB[i];
+  if (u.user_login === (usuarioAtual && usuarioAtual.user)) { showToast('Não é possível excluir o usuário logado.'); return; }
+  if (!confirm('Excluir o usuário ' + u.nome + '? (isso remove o perfil; o login precisa ser removido também em Authentication no Supabase)')) return;
+  const { error } = await sb.from('usuarios').delete().eq('id', u.id);
+  if (error) { showToast('Erro ao excluir: ' + error.message); return; }
+  await carregarUsuarios();
   showToast('Usuário removido.');
+}
+
+async function carregarUsuarios() {
+  const { data, error } = await sb.from('usuarios').select('*').order('criado_em');
+  if (error) { showToast('Erro ao carregar usuários: ' + error.message); return; }
+  usuariosDB = data || [];
+  renderUsuarios();
 }
 
 function renderUsuarios() {
@@ -1263,11 +1324,11 @@ function renderUsuarios() {
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${u.nome}</td>
-      <td><span style="color:var(--text3)">${u.user}</span></td>
+      <td><span style="color:var(--text3)">${u.user_login}</span></td>
       <td><span class="status" style="background:rgba(0,0,0,0.2);color:${cor}">${PERFIL_LABELS[u.perfil]}</span></td>
       <td><span class="status ativo"><span class="dot"></span>Ativo</span></td>
       <td>
-        ${u.user !== (usuarioAtual && usuarioAtual.user) ? '<button class="btn btn-danger btn-sm" onclick="excluirUsuario(' + i + ')">Excluir</button>' : '<span style="font-size:11px;color:var(--text3)">Você</span>'}
+        ${u.user_login !== (usuarioAtual && usuarioAtual.user) ? '<button class="btn btn-danger btn-sm" onclick="excluirUsuario(' + i + ')">Excluir</button>' : '<span style="font-size:11px;color:var(--text3)">Você</span>'}
       </td>`;
     tbody.appendChild(tr);
   });
@@ -1352,7 +1413,7 @@ const STATUS_PROSP = {
   convertido: { label:'Convertido ✅',      cor:'#22c55e' },
 };
 
-let prospects = JSON.parse(localStorage.getItem('ms-prospects') || '[]');
+let prospects = [];   // cache local da tabela 'oportunidades' do Supabase
 let prospFiltro = 'todos';
 let prospAtualIdx = null;
 
@@ -1361,26 +1422,40 @@ document.getElementById('pr-catalogo').addEventListener('change', function() {
   document.getElementById('pr-link-wrap').style.display = this.value === 'custom' ? 'block' : 'none';
 });
 
-function salvarProspect() {
+async function carregarOportunidades() {
+  const { data, error } = await sb.from('oportunidades').select('*').order('criado_em', { ascending: false });
+  if (error) { showToast('Erro ao carregar oportunidades: ' + error.message); return; }
+  // Mapear colunas do banco para os nomes usados na tela (compatibilidade com o código existente)
+  prospects = (data || []).map(o => ({
+    id: o.id, nome: o.nome, wpp: o.whatsapp, resp: o.responsavel_texto,
+    seg: o.segmento, catalogo: o.catalogo, link: o.link, obs: o.observacoes,
+    status: o.status, data: new Date(o.criado_em).toLocaleDateString('pt-BR')
+  }));
+  renderProspects();
+}
+
+async function salvarProspect() {
   const nome = document.getElementById('pr-nome').value.trim();
   const wpp  = document.getElementById('pr-wpp').value.trim().replace(/\D/g,'');
   if (!nome || !wpp) { showToast('Preencha nome e WhatsApp!'); return; }
   const cat = document.getElementById('pr-catalogo').value;
   const linkCustom = document.getElementById('pr-link-custom').value.trim();
-  prospects.unshift({
-    nome, wpp,
-    resp:     document.getElementById('pr-resp').value.trim(),
-    seg:      document.getElementById('pr-seg').value,
+
+  const { error } = await sb.from('oportunidades').insert({
+    nome, whatsapp: wpp,
+    responsavel_texto: document.getElementById('pr-resp').value.trim(),
+    segmento: document.getElementById('pr-seg').value,
     catalogo: cat,
-    link:     cat === 'custom' ? linkCustom : (CATALOGO_LINKS[cat] || ''),
-    obs:      document.getElementById('pr-obs').value.trim(),
-    status:   'aguardando',
-    data:     new Date().toLocaleDateString('pt-BR'),
+    link: cat === 'custom' ? linkCustom : (CATALOGO_LINKS[cat] || ''),
+    observacoes: document.getElementById('pr-obs').value.trim(),
+    status: 'aguardando',
+    responsavel_id: usuarioAtual ? usuarioAtual.id : null
   });
-  localStorage.setItem('ms-prospects', JSON.stringify(prospects));
+  if (error) { showToast('Erro ao salvar: ' + error.message); return; }
+
   ['pr-nome','pr-resp','pr-wpp','pr-link-custom','pr-obs'].forEach(id => document.getElementById(id).value = '');
   closeModal('modal-prospect');
-  renderProspects();
+  await carregarOportunidades();
   showToast('Prospect cadastrado!');
 }
 
@@ -1460,34 +1535,39 @@ Qualquer dúvida, estou à disposição! 🤝
   openModal('modal-msg-wpp');
 }
 
-function abrirWhatsApp() {
+async function abrirWhatsApp() {
   const p = prospects[prospAtualIdx];
   const msg = document.getElementById('msg-wpp-texto').value;
   const url = 'https://wa.me/' + p.wpp + '?text=' + encodeURIComponent(msg);
   window.open(url, '_blank');
-  // Atualizar status para enviado automaticamente
+  // Atualizar status para enviado automaticamente + registrar no histórico
   if (p.status === 'aguardando') {
-    prospects[prospAtualIdx].status = 'enviado';
-    localStorage.setItem('ms-prospects', JSON.stringify(prospects));
+    await sb.from('oportunidades').update({ status: 'enviado', atualizado_em: new Date().toISOString() }).eq('id', p.id);
   }
+  await sb.from('historico_contatos').insert({
+    oportunidade_id: p.id, tipo: 'whatsapp', descricao: 'Mensagem enviada via WhatsApp',
+    usuario_id: usuarioAtual ? usuarioAtual.id : null
+  });
   closeModal('modal-msg-wpp');
-  renderProspects();
+  await carregarOportunidades();
   showToast('WhatsApp aberto! Status atualizado para Enviado.');
 }
 
-function mudarStatus(idx, status) {
+async function mudarStatus(idx, status) {
   if (!status) return;
-  prospects[idx].status = status;
-  localStorage.setItem('ms-prospects', JSON.stringify(prospects));
-  renderProspects();
+  const p = prospects[idx];
+  const { error } = await sb.from('oportunidades').update({ status, atualizado_em: new Date().toISOString() }).eq('id', p.id);
+  if (error) { showToast('Erro ao atualizar: ' + error.message); return; }
+  await carregarOportunidades();
   showToast('Status atualizado!');
 }
 
-function excluirProspect(idx) {
-  if (!confirm('Excluir ' + prospects[idx].nome + '?')) return;
-  prospects.splice(idx, 1);
-  localStorage.setItem('ms-prospects', JSON.stringify(prospects));
-  renderProspects();
+async function excluirProspect(idx) {
+  const p = prospects[idx];
+  if (!confirm('Excluir ' + p.nome + '?')) return;
+  const { error } = await sb.from('oportunidades').delete().eq('id', p.id);
+  if (error) { showToast('Erro ao excluir: ' + error.message); return; }
+  await carregarOportunidades();
   showToast('Prospect removido.');
 }
 
