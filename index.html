@@ -1217,7 +1217,7 @@ async function carregarPerfilLogado() {
 
   const { data: perfil, error } = await sb.from('usuarios').select('*').eq('id', user.id).single();
   if (error || !perfil) {
-    document.getElementById('login-error').textContent = 'Login ok, mas o perfil do usuário não foi encontrado na tabela usuarios.';
+    document.getElementById('login-error').textContent = 'Erro: ' + (error ? (error.message + ' [' + error.code + ']') : 'perfil não encontrado') + ' | UID logado: ' + user.id;
     document.getElementById('login-error').style.display = 'block';
     await sb.auth.signOut();
     return;
