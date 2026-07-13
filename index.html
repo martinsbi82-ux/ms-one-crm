@@ -1281,14 +1281,20 @@ async function salvarUsuario() {
   if (!nome || !user || senha.length < 6) { showToast('Preencha nome, usuário e senha (mín. 6 chars)'); return; }
   if (usuariosDB.find(x => x.user_login === user)) { showToast('Usuário já existe!'); return; }
 
-  const { data, error } = await sbAdmin.auth.signUp({
-    email: user + AUTH_DOMAIN,
-    password: senha
+  const resp = await fetch(SUPABASE_URL + '/functions/v1/create-user', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ' + SUPABASE_ANON_KEY,
+      'apikey': SUPABASE_ANON_KEY
+    },
+    body: JSON.stringify({ email: user + AUTH_DOMAIN, password: senha })
   });
-  if (error || !data.user) { showToast('Erro ao criar login: ' + (error ? error.message : '')); return; }
+  const result = await resp.json();
+  if (!resp.ok || result.error) { showToast('Erro ao criar login: ' + (result.error || resp.statusText)); return; }
 
   const { error: perfilError } = await sb.from('usuarios').insert({
-    id: data.user.id, nome, user_login: user, perfil, email
+    id: result.user.id, nome, user_login: user, perfil, email
   });
   if (perfilError) { showToast('Login criado, mas erro ao salvar perfil: ' + perfilError.message); return; }
 
